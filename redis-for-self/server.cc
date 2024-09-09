@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <map>
 #include <poll.h>
 
 #include "header.h"
@@ -30,49 +31,6 @@ static void fd_set_nb(int fd) {
   }
 }
 
-// int handle_error(int ret) {
-//   if (ret < 0) {
-//     perror("deal error: ");
-//     return -1;
-//   }
-//   if (ret == 0) {
-//     std::cout << "client close the connection." << std::endl;
-//     return 0;
-//   }
-//   return 1;
-// }
-//
-// int handle(int conn_fd) {
-//   char rbuf[MSG_LEN_SIZE + MAX_MSG_LEN + 1] = {0};
-//   if (handle_error(read_full(conn_fd, rbuf, MSG_LEN_SIZE)) <= 0) {
-//     return -1;
-//   }
-//   uint32_t msg_len = 0;
-//   memcpy(&msg_len, rbuf, MSG_LEN_SIZE);
-//   if (msg_len > MAX_MSG_LEN) {
-//     std::cout << "msg too long." << std::endl;
-//     return -1;
-//   }
-//   if (handle_error(read_full(conn_fd, rbuf + MSG_LEN_SIZE, msg_len)) <= 0) {
-//     return -1;
-//   }
-//   rbuf[MSG_LEN_SIZE + msg_len] = 0;
-//
-//   // client say
-//   std::cout << "[client]: " << rbuf+MSG_LEN_SIZE << std::endl;
-//
-//   // server reply
-//   char wbuf[MSG_LEN_SIZE + MAX_MSG_LEN] = {0};
-//   const char* reply = "world";
-//   uint32_t wlen = strlen(reply);
-//   memcpy(wbuf, &wlen, MSG_LEN_SIZE);
-//   memcpy(wbuf+MSG_LEN_SIZE, reply, wlen);
-//   if (handle_error(write_all(conn_fd, wbuf, wlen+MSG_LEN_SIZE)) <= 0) {
-//     return -1;
-//   }
-//   return 0;
-// }
-
 enum {
   STATE_REQ = 0,
   STATE_RES = 1,
@@ -92,6 +50,104 @@ struct Conn {
 static void state_req(Conn*);
 static void state_res(Conn*);
 
+/**
+*  +------+-----+------+-----+------+-----+-----+------+
+*  | nstr | len | str1 | len | str2 | ... | len | strn |
+*  +------+-----+------+-----+------+-----+-----+------+
+*  nstr => the number of strings (32-bit integers)
+*  len => the length of the following string (32-bit integers)
+*/
+static int32_t parse_req(const uint8_t* data, size_t len, std::vector<std::string>& out) {
+  if (len < 4) {
+    return -1;
+  }
+  uint32_t n = 0;
+  memcpy(&n, &data[0], MSG_LEN_SIZE);
+  if (n > MAX_MSG_LEN) {
+    return -1;
+  }
+  size_t pos = MSG_LEN_SIZE;
+  while (n--) {
+    if (pos + MSG_LEN_SIZE > len) {
+      return -1;
+    }
+    uint32_t sz = 0;
+    memcpy(&sz, &data[pos], MSG_LEN_SIZE);
+    if (pos + 4 + sz > len) {
+      return -1;
+    }
+    out.push_back(std::string((char*)&data[pos+4], sz));
+    pos += 4 + sz;
+  }
+  if (pos != len) {
+    return -1; // trailing garbage
+  }
+  return 0;
+}
+
+enum {
+  RES_OK = 0,
+  RES_ERR = 1,
+  RES_NX = 2,
+};
+
+// the data structure for the key space. This is just a placeholder
+// until we implement a hashtable in the next chapter.
+
+static std::map<std::string, std::string> g_map;
+
+static uint32_t do_get(const std::vector<std::string>& cmd, uint8_t* res, uint32_t* reslen) {
+  if (!g_map.count(cmd[1])) {
+    return RES_NX;
+  }
+  std::string& val = g_map[cmd[1]];
+  assert(val.size() <= MAX_MSG_LEN);
+  memcpy(res, val.data(), val.size());
+  *reslen = (uint32_t)val.size();
+  return RES_OK;
+}
+
+static uint32_t do_set(const std::vector<std::string>& cmd, uint8_t* res, uint32_t* reslen) {
+  (void)res;
+  (void)reslen;
+  g_map[cmd[1]] = cmd[2];
+  return RES_OK;
+}
+
+static uint32_t do_del(const std::vector<std::string>& cmd, uint8_t* res, uint32_t* reslen) {
+  (void)res;
+  (void)reslen;
+  g_map.erase(cmd[1]);
+  return RES_OK;
+}
+
+static bool cmd_is(const std::string& in, const std::string& cmd) {
+  return (in == cmd);
+}
+
+static int32_t do_request(const uint8_t* req, uint32_t reqlen,
+      uint32_t* rescode, uint8_t* res, uint32_t* reslen) {
+  std::vector<std::string> cmd;
+  if (0 != parse_req(req, reqlen, cmd)) {
+    std::cerr << "bad request." << std::endl;
+    return -1;
+  }
+  if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
+    *rescode = do_get(cmd, res, reslen);
+  } else if (cmd.size() == 3 && cmd_is(cmd[0], "set")) {
+    *rescode = do_set(cmd, res, reslen);
+  } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
+    *rescode = do_del(cmd, res, reslen);
+  } else {
+    *rescode = RES_ERR;
+    const char* msg = "Unknow cmd";
+    strcpy((char*)res, msg);
+    *reslen = strlen(msg);
+    return 0;
+  }
+  return 0;
+}
+
 static bool try_one_request(Conn* conn) {
   // try to parse a request from the buffer
   if (conn->rbuf_size < 4) {
@@ -109,19 +165,37 @@ static bool try_one_request(Conn* conn) {
     // not enough data in the buffer.
     return false;
   }
-  printf("client say: %d, %s\n", len, &conn->rbuf[MSG_LEN_SIZE]);
+  // printf("client say: %d, %s\n", len, &conn->rbuf[MSG_LEN_SIZE]);
 
-  // generating echoing response
-  memcpy(&conn->wbuf[0], &conn->rbuf[0], MSG_LEN_SIZE);
-  memcpy(&conn->wbuf[MSG_LEN_SIZE], &conn->rbuf[MSG_LEN_SIZE], len);
-  conn->wbuf_size = MSG_LEN_SIZE + len;
+  // got one request, generating echoing response
+  uint32_t rescode = 0;
+  uint32_t wlen = 0;
+  int32_t err = do_request(&conn->rbuf[MSG_LEN_SIZE], len,
+      &rescode, &conn->wbuf[MSG_LEN_SIZE + RESP_CODE_SIZE], &wlen);
+  if (err) {
+    conn->state = STATE_END;
+    return false;
+  }
 
-  size_t remain = conn->rbuf_size - MSG_LEN_SIZE - len;
-  if (remain)
-    memmove(conn->rbuf, &conn->rbuf[MSG_LEN_SIZE+len], remain);
+  wlen += 4;
+  memcpy(&conn->wbuf[0], &wlen, MSG_LEN_SIZE);
+  memcpy(&conn->wbuf[MSG_LEN_SIZE], &rescode, 4);
+  conn->wbuf_size = MSG_LEN_SIZE + wlen;
+
+  // remove the request from the buffer.
+  // note: frequent memmove is inefficient.
+  // note need better handling for production code.
+  size_t remain = conn->rbuf_size - 4 - len;
+  if (remain) {
+    memmove(conn->rbuf, &conn->rbuf[MSG_LEN_SIZE + len], remain);
+  }
   conn->rbuf_size = remain;
+
+  // change states
   conn->state = STATE_RES;
   state_res(conn);
+
+  // continue the outer loop is the request was fully processed
   return (conn->state == STATE_REQ);
 }
 
@@ -297,24 +371,5 @@ int main() {
       accept_new_conn(fd2Conn, sock_fd);
     }
   }
-
-
-  // struct sockaddr_in peer;
-  // bzero(&peer, sizeof(peer));
-  // socklen_t len = 0;
-  //
-  // while(true) {
-  //   int conn_fd = accept(sock_fd, (sockaddr*)&peer, &len);
-  //   if (conn_fd < 0) {
-  //     perror("accept error: ");
-  //     continue;
-  //   }
-  //   std::cout << "accept done: [" << inet_ntoa(peer.sin_addr) << ":" << ntohs(peer.sin_port)
-  //             << "] fd: " << conn_fd << std::endl;
-  //   while(true) {
-  //     if (handle(conn_fd) < 0) break;
-  //   }
-  //   std::cout << "handle done: fd: " << conn_fd << std::endl;
-  // }
   return 0;
 }

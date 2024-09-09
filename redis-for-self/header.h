@@ -12,6 +12,7 @@
 
 #define MSG_LEN_SIZE 4
 #define MAX_MSG_LEN 4096
+#define RESP_CODE_SIZE 4
 
 int32_t read_full(int fd, char* rbuf, size_t len) {
     int sz = len;

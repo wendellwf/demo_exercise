@@ -1,2 +1,6 @@
 # demo_exercise
-exercise code demo
+## build
+```bash
+mkdir build && cd build
+cmake .. && make
+```
