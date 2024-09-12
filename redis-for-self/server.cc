@@ -16,6 +16,9 @@
 
 #define LISTEN_LEN 5
 
+#define CMD_NUMBER_SIZE 4
+#define CMD_LEN_SIZE 4
+
 static void fd_set_nb(int fd) {
   errno = 0;
   int flags = fcntl(fd, F_GETFL, 0);
@@ -51,6 +54,37 @@ static void state_req(Conn*);
 static void state_res(Conn*);
 
 /**
+*  +------+------+-----+------+-----+------+-----+-----+------+
+*  | alen | nstr | len | str1 | len | str2 | ... | len | strn |
+*  +------+------+-----+------+-----+------+-----+-----+------+
+*  alen => the length of the client send raw string (32-bit integers)
+*  nstr => the number of strings (32-bit integers)
+*  len => the length of the following string (32-bit integers)
+*
+*  unserilize: show the message structure
+*/
+static void unserilize(const char* buffer) {
+  printf("++++++++++unserilize++++++++++++\n");
+  uint32_t len = 0;
+  uint32_t num = 0;
+  memcpy(&len, &buffer[0], MSG_LEN_SIZE);
+  memcpy(&num, &buffer[MSG_LEN_SIZE], CMD_NUMBER_SIZE);
+  printf("buffer: len: %u, cmd_number: %u\n", len, num);
+
+  uint32_t cur = MSG_LEN_SIZE + CMD_NUMBER_SIZE;
+  while (cur < len) {
+    uint32_t cmd_len = 0;
+    char cmd[1024] = {0};
+    memcpy(&cmd_len, &buffer[cur], CMD_LEN_SIZE);
+    cur += CMD_LEN_SIZE;
+    memcpy(cmd, &buffer[cur], cmd_len);
+    printf("\tcmd_len: %u, cmd: %s\n", cmd_len, cmd);
+    cur += cmd_len;
+  }
+  printf("+++++++++++++++++++++++++++++++++\n");
+}
+
+/**
 *  +------+-----+------+-----+------+-----+-----+------+
 *  | nstr | len | str1 | len | str2 | ... | len | strn |
 *  +------+-----+------+-----+------+-----+-----+------+
@@ -61,9 +95,9 @@ static int32_t parse_req(const uint8_t* data, size_t len, std::vector<std::strin
   if (len < 4) {
     return -1;
   }
-  uint32_t n = 0;
-  memcpy(&n, &data[0], MSG_LEN_SIZE);
-  if (n > MAX_MSG_LEN) {
+  uint32_t n = 0; // cmd number
+  memcpy(&n, &data[0], CMD_NUMBER_SIZE);
+  if (n > 4) {
     return -1;
   }
   size_t pos = MSG_LEN_SIZE;
@@ -72,11 +106,11 @@ static int32_t parse_req(const uint8_t* data, size_t len, std::vector<std::strin
       return -1;
     }
     uint32_t sz = 0;
-    memcpy(&sz, &data[pos], MSG_LEN_SIZE);
+    memcpy(&sz, &data[pos], CMD_LEN_SIZE);
     if (pos + 4 + sz > len) {
       return -1;
     }
-    out.push_back(std::string((char*)&data[pos+4], sz));
+    out.push_back(std::string((char*)&data[pos+CMD_LEN_SIZE], sz));
     pos += 4 + sz;
   }
   if (pos != len) {
@@ -220,13 +254,15 @@ static bool try_fill_buffer(Conn* conn) {
     if (conn->rbuf_size > 0) {
       std::cout << "unexpected EOF" << std::endl;
     } else {
-      std::cout << "EOF" << std::endl;
+      // normal finish
+      // EOF
     }
     conn->state = STATE_END;
     return false;
   }
   conn->rbuf_size += (size_t)rv;
   assert(conn->rbuf_size <= sizeof(conn->rbuf) - conn->rbuf_size);
+
   while(try_one_request(conn)) {}
   return (conn->state == STATE_REQ);
 }
