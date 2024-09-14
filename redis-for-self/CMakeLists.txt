@@ -6,5 +6,6 @@ set( CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 
 
-add_executable(server server.cc header.h)
+add_executable(server server.cc header.h
+        hashtable.h)
 add_executable(client client.cc header.h)
