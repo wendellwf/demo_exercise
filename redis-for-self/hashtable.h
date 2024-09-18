@@ -143,5 +143,15 @@ HNode* hm_pop(HMap* hmap, HNode* key, bool (*cmp)(HNode*, HNode*)) {
     return NULL;
 }
 
+size_t hm_size(HMap* hmap) {
+    return hmap->ht1.size + hmap->ht2.size;
+}
+
+void hm_destory(HMap* hmap) {
+    free(hmap->ht1.tab);
+    free(hmap->ht2.tab);
+    *hmap = HMap{};
+}
+
 
 #endif //HASHTABLE_H
