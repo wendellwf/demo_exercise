@@ -144,7 +144,7 @@ static int32_t on_response(const uint8_t* data, size_t size) {
             {
             int64_t val = 0;
             memcpy(&val, &data[1], 8);
-            printf("(int) %ld\n", val);
+            printf("(int) %lld\n", val);
             return 1 + 8;
             }
         case SER_ARR:
@@ -162,14 +162,16 @@ static int32_t on_response(const uint8_t* data, size_t size) {
                 if (rv < 0) {
                     return rv;
                 }
-                printf("(arr) end\n");
-                return (int32_t)arr_bytes;
+                arr_bytes += (size_t)rv;
             }
+            printf("(arr) end\n");
+            return (int32_t)arr_bytes;
             }
         default:
-            msg("bad response");
-            return -1;
+            break;
     }
+    msg("bad response");
+    return -1;
 }
 
 static int32_t read_res(int fd) {
