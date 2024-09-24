@@ -50,6 +50,7 @@ static bool del(Container& c, uint32_t val) {
     if (!cur) {
         return false;
     }
+
     c.root = avl_del(cur);
     delete container_of(cur, Data, node);
     return true;

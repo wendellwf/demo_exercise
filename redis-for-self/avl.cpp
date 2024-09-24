@@ -113,7 +113,7 @@ static AVLNode* avl_del(AVLNode* node) {
         }
         if (parent) {
             // attach the left subtree to the parent
-            (parent->left == node ? parent->left : parent->right);
+            (parent->left == node ? parent->left : parent->right) = node->left;
             return avl_fix(parent);
         } else {
             // removing root?
@@ -136,7 +136,7 @@ static AVLNode* avl_del(AVLNode* node) {
         }
         AVLNode* parent = node->parent;
         if (parent) {
-            (parent->left == node ? parent->left : parent->right);
+            (parent->left == node ? parent->left : parent->right) = victim;
             return root;
         } else {
             // removing root?
